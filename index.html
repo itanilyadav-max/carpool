@@ -547,6 +547,12 @@
         }
 
         window.requestTrip = async (tripId) => {
+            const tripSnap = await get(ref(db, `trips/${tripId}`));
+            const tripVal = tripSnap.val();
+            if (!tripVal) return Swal.fire('Error', 'Trip no longer exists', 'error');
+            if (tripVal.driverId === currentUser.uid) return Swal.fire('Error', 'You cannot request a seat on your own trip', 'error');
+            if (tripVal.riders && tripVal.riders[currentUser.uid]) return Swal.fire('Info', 'You already requested a seat on this trip', 'info');
+
             const { value: seats } = await Swal.fire({
                 title: 'How many seats?',
                 input: 'number',
@@ -554,23 +560,33 @@
                 inputAttributes: { min: 1, max: 4 }
             });
             if (!seats) return;
+            const seatsNum = parseInt(seats);
 
             const tripRef = ref(db, `trips/${tripId}`);
-            await runTransaction(tripRef, (trip) => {
-                if (trip && trip.seatsLeft >= seats) {
-                    trip.seatsLeft -= seats;
-                    if (!trip.riders) trip.riders = {};
-                    trip.riders[currentUser.uid] = {
-                        name: auth.currentUser.displayName || 'Rider',
-                        seats: parseInt(seats),
-                        status: 'requested',
-                        requestedAt: Date.now()
-                    };
-                    if (trip.seatsLeft === 0) trip.status = 'full';
+            try {
+                const result = await runTransaction(tripRef, (trip) => {
+                    if (trip && trip.seatsLeft >= seatsNum) {
+                        trip.seatsLeft -= seatsNum;
+                        if (!trip.riders) trip.riders = {};
+                        trip.riders[currentUser.uid] = {
+                            name: auth.currentUser.displayName || 'Rider',
+                            seats: seatsNum,
+                            status: 'requested',
+                            requestedAt: Date.now()
+                        };
+                        if (trip.seatsLeft === 0) trip.status = 'full';
+                        return trip;
+                    }
+                    // Not enough seats left (or trip vanished) - abort, no write.
+                    return;
+                });
+                if (!result.committed) {
+                    return Swal.fire('Error', 'Not enough seats left, or trip is no longer available', 'error');
                 }
-                return trip;
-            });
-            Swal.fire('Success', 'Request sent to driver', 'success');
+                Swal.fire('Success', 'Request sent to driver', 'success');
+            } catch (error) {
+                Swal.fire('Error', 'Could not send request: ' + error.message, 'error');
+            }
         };
 
         function loadMyTrips() {
