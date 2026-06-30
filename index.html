@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>RideShare - Live Carpooling</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/dayjs.min.js"></script>
+    <style>
+        :root {
+            --primary: #0ea5e9; --success: #22c55e; --danger: #ef4444; --warning: #f59e0b;
+            --bg: #f8fafc; --card: #ffffff; --text: #0f172a; --text-light: #64748b; --border: #e2e8f0;
+        }
+        [data-theme="dark"] {
+            --bg: #0f172a; --card: #1e293b; --text: #f1f5f9; --text-light: #94a3b8; --border: #334155;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', sans-serif; }
+        body { background: var(--bg); color: var(--text); transition: 0.3s; }
+        .hidden { display: none !important; }
+        .container { max-width: 480px; margin: 0 auto; min-height: 100vh; background: var(--bg); position: relative; }
+        .header { position: sticky; top: 0; background: var(--card); padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); z-index: 100; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 20px; font-weight: 700; color: var(--primary); }
+        .btn { padding: 12px 20px; border: none; border-radius: 12px; font-weight: 600; cursor: pointer; transition: 0.2s; display: inline-flex; align-items: center; gap: 8px; }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:active { transform: scale(0.95); }
+        .btn-success { background: var(--success); color: white; }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-outline { background: transparent; border: 2px solid var(--border); color: var(--text); }
+        .btn-full { width: 100%; justify-content: center; }
+        .btn-sm { padding: 8px 12px; font-size: 14px; }
+        .card { background: var(--card); border-radius: 16px; padding: 16px; margin: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .input-group { margin-bottom: 16px; }
+        .input-group label { display: block; font-size: 14px; font-weight: 500; margin-bottom: 6px; color: var(--text-light); }
+        .input { width: 100%; padding: 12px; border: 2px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--text); font-size: 16px; }
+        .input:focus { outline: none; border-color: var(--primary); }
+        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; max-width: 480px; margin: 0 auto; background: var(--card); display: flex; justify-content: space-around; padding: 8px 0; box-shadow: 0 -1px 3px rgba(0,0,0,0.1); z-index: 100; }
+        .nav-item { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 16px; cursor: pointer; color: var(--text-light); }
+        .nav-item.active { color: var(--primary); }
+        .nav-item i { font-size: 20px; }
+        .nav-item span { font-size: 12px; font-weight: 500; }
+        .trip-card { border-left: 4px solid var(--primary); }
+        .trip-card.full { border-left-color: var(--text-light); opacity: 0.6; }
+        .flex-between { display: flex; justify-content: space-between; align-items: center; }
+        .badge { padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+        .badge-success { background: #dcfce7; color: #166534; }
+        .badge-warning { background: #fef3c7; color: #92400e; }
+        .badge-danger { background: #fee2e2; color: #991b1b; }
+        #map { height: 300px; border-radius: 16px; margin: 12px; z-index: 1; }
+        .login-container { padding: 40px 20px; text-align: center; }
+        .login-container h2 { margin: 20px 0; }
+        .divider { text-align: center; margin: 20px 0; color: var(--text-light); }
+        .floating-btn { position: fixed; bottom: 80px; right: 20px; width: 56px; height: 56px; border-radius: 50%; background: var(--primary); color: white; display: flex; align-items: center; justify-content: center; font-size: 24px; box-shadow: 0 4px 12px rgba(14,165,233,0.4); cursor: pointer; z-index: 99; }
+        .skeleton { background: linear-gradient(90deg, var(--border) 25%, var(--bg) 50%, var(--border) 75%); background-size: 200% 100%; animation: loading 1.5s infinite; border-radius: 8px; }
+        @keyframes loading { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+        .modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: flex-end; z-index: 1000; }
+        .modal-content { background: var(--card); width: 100%; max-width: 480px; margin: 0 auto; border-radius: 20px 20px 0 0; padding: 20px; max-height: 80vh; overflow-y: auto; }
+    </style>
+</head>
+<body data-theme="light">
+    <div class="container">
+        <!-- Login Screen -->
+        <div id="loginScreen" class="login-container">
+            <i class="fas fa-car-side" style="font-size: 64px; color: var(--primary);"></i>
+            <h2>RideShare</h2>
+            <p style="color: var(--text-light); margin-bottom: 30px;">Share rides, save money, go green</p>
+            <div id="recaptcha-container"></div>
+            <div class="input-group">
+                <input type="tel" id="phoneInput" class="input" placeholder="+91 98765 43210">
+            </div>
+            <button class="btn btn-primary btn-full" onclick="sendOTP()">
+                <i class="fas fa-mobile-alt"></i> Send OTP
+            </button>
+            <div class="divider">OR</div>
+            <button class="btn btn-outline btn-full" onclick="signInGoogle()">
+                <i class="fab fa-google"></i> Continue with Google
+            </button>
+            <div class="divider">OR</div>
+            <div class="input-group" style="text-align: left;">
+                <label>Email</label>
+                <input type="email" id="emailInput" class="input" placeholder="you@example.com">
+            </div>
+            <div class="input-group" style="text-align: left;">
+                <label>Password</label>
+                <input type="password" id="passwordInput" class="input" placeholder="At least 6 characters">
+            </div>
+            <button class="btn btn-primary btn-full" id="emailAuthBtn" onclick="emailLogin()">
+                <i class="fas fa-envelope"></i> Login with Email
+            </button>
+            <p style="margin-top: 14px; font-size: 14px; color: var(--text-light);">
+                New here? <a href="#" id="toggleAuthModeLink" onclick="toggleAuthMode(event)" style="color: var(--primary); font-weight: 600;">Create an account</a>
+            </p>
+        </div>
+
+        <!-- Onboarding Screen -->
+        <div id="onboardingScreen" class="hidden" style="padding: 20px;">
+            <h2>Complete Your Profile</h2>
+            <div class="input-group">
+                <label>Full Name</label>
+                <input type="text" id="userName" class="input" placeholder="John Doe">
+            </div>
+            <div class="input-group">
+                <label>I want to</label>
+                <select id="userRole" class="input">
+                    <option value="rider">Find Rides</option>
+                    <option value="driver">Offer Rides</option>
+                    <option value="both">Both</option>
+                </select>
+            </div>
+            <div id="carDetailsSection" class="hidden">
+                <h3 style="margin: 20px 0 10px;">Car Details</h3>
+                <div class="input-group">
+                    <label>Car Model</label>
+                    <input type="text" id="carModel" class="input" placeholder="Honda City">
+                </div>
+                <div class="input-group">
+                    <label>Plate Number</label>
+                    <input type="text" id="carPlate" class="input" placeholder="MH12AB1234">
+                </div>
+                <div class="input-group">
+                    <label>Total Seats</label>
+                    <input type="number" id="carSeats" class="input" placeholder="4" min="2" max="8">
+                </div>
+                <div class="input-group">
+                    <label>UPI ID for Payments</label>
+                    <input type="text" id="upiId" class="input" placeholder="yourname@upi">
+                </div>
+            </div>
+            <button class="btn btn-primary btn-full" onclick="saveProfile()">Continue</button>
+        </div>
+
+        <!-- Main App -->
+        <div id="mainApp" class="hidden">
+            <div class="header">
+                <h1><i class="fas fa-car-side"></i> RideShare</h1>
+                <div>
+                    <i class="fas fa-moon" onclick="toggleTheme()" style="cursor: pointer; margin-right: 12px;"></i>
+                    <i class="fas fa-user-circle" onclick="showProfile()" style="cursor: pointer;"></i>
+                </div>
+            </div>
+
+            <!-- Home Tab -->
+            <div id="homeTab" class="tab-content">
+                <div class="card">
+                    <div class="flex-between">
+                        <div>
+                            <h3 id="welcomeText">Hello!</h3>
+                            <p style="color: var(--text-light); font-size: 14px;">Ready to share a ride?</p>
+                        </div>
+                        <img id="userAvatar" src="https://ui-avatars.com/api/?name=User&background=0ea5e9&color=fff" style="width: 48px; height: 48px; border-radius: 50%;">
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 12px;">
+                    <button class="btn btn-primary btn-full" onclick="showOfferRide()" id="offerRideBtn">
+                        <i class="fas fa-plus"></i> Offer Ride
+                    </button>
+                    <button class="btn btn-success btn-full" onclick="showFindRide()">
+                        <i class="fas fa-search"></i> Find Ride
+                    </button>
+                </div>
+
+                <div id="map"></div>
+                
+                <h3 style="margin: 20px 12px 10px;">Nearby Trips</h3>
+                <div id="nearbyTrips"></div>
+            </div>
+
+            <!-- Trips Tab -->
+            <div id="tripsTab" class="tab-content hidden">
+                <h3 style="margin: 20px 12px 10px;">My Trips</h3>
+                <div id="myTrips"></div>
+            </div>
+
+            <!-- Profile Tab -->
+            <div id="profileTab" class="tab-content hidden">
+                <div class="card" style="text-align: center;">
+                    <img id="profileAvatar" src="" style="width: 80px; height: 80px; border-radius: 50%; margin-bottom: 12px;">
+                    <h3 id="profileName"></h3>
+                    <p style="color: var(--text-light);" id="profileRole"></p>
+                    <div style="display: flex; justify-content: center; gap: 20px; margin-top: 16px;">
+                        <div>
+                            <div style="font-size: 24px; font-weight: 700;" id="totalTrips">0</div>
+                            <div style="font-size: 12px; color: var(--text-light);">Trips</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 24px; font-weight: 700;" id="userRating">5.0</div>
+                            <div style="font-size: 12px; color: var(--text-light);">Rating</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <button class="btn btn-outline btn-full" onclick="logout()" style="color: var(--danger);">
+                        <i class="fas fa-sign-out-alt"></i> Logout
+                    </button>
+                </div>
+            </div>
+
+            <div class="bottom-nav">
+                <div class="nav-item active" onclick="switchTab('home')">
+                    <i class="fas fa-home"></i><span>Home</span>
+                </div>
+                <div class="nav-item" onclick="switchTab('trips')">
+                    <i class="fas fa-route"></i><span>Trips</span>
+                </div>
+                <div class="nav-item" onclick="switchTab('profile')">
+                    <i class="fas fa-user"></i><span>Profile</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Offer Ride Modal -->
+    <div id="offerRideModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="flex-between" style="margin-bottom: 20px;">
+                <h3>Offer a Ride</h3>
+                <i class="fas fa-times" onclick="closeModal('offerRideModal')" style="cursor: pointer;"></i>
+            </div>
+            <div class="input-group">
+                <label>From</label>
+                <input type="text" id="fromLocation" class="input" placeholder="Start location">
+                <button class="btn btn-sm btn-outline" style="margin-top: 8px;" onclick="useCurrentLocation('from')">
+                    <i class="fas fa-location-arrow"></i> Current Location
+                </button>
+            </div>
+            <div class="input-group">
+                <label>To</label>
+                <input type="text" id="toLocation" class="input" placeholder="Destination">
+            </div>
+            <div class="input-group">
+                <label>Departure Time</label>
+                <input type="datetime-local" id="departureTime" class="input">
+            </div>
+            <div class="input-group">
+                <label>Available Seats</label>
+                <input type="number" id="availableSeats" class="input" min="1" max="7" value="3">
+            </div>
+            <div class="input-group">
+                <label>Fare per Seat (₹)</label>
+                <input type="number" id="farePerSeat" class="input" placeholder="150">
+            </div>
+            <div class="input-group">
+                <label>Payment Method</label>
+                <select id="paymentMode" class="input">
+                    <option value="both">Cash & UPI</option>
+                    <option value="cash">Cash Only</option>
+                    <option value="upi">UPI Only</option>
+                </select>
+            </div>
+            <button class="btn btn-primary btn-full" onclick="postTrip()">Go Live</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, signInWithPhoneNumber, RecaptchaVerifier, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getDatabase, ref, set, push, onValue, update, get, runTransaction, query, orderByChild, equalTo } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyD67KfythGb-uX09OyIqmZFPBfAOEFhjKg",
+            authDomain: "carpooling-db507.firebaseapp.com",
+            databaseURL: "https://carpooling-db507-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "carpooling-db507",
+            storageBucket: "carpooling-db507.firebasestorage.app",
+            messagingSenderId: "85855852625",
+            appId: "1:85855852625:web:a62af702024a7bfc5d8070"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getDatabase(app);
+        let currentUser = null;
+        let userLocation = null;
+        let map = null;
+        let confirmationResult = null;
+
+        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+            'size': 'invisible'
+        });
+
+        // Auth State
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                currentUser = user;
+                const userSnap = await get(ref(db, `users/${user.uid}`));
+                if (userSnap.exists()) {
+                    showMainApp(userSnap.val());
+                } else {
+                    showOnboarding();
+                }
+            } else {
+                showLogin();
+            }
+        });
+
+        window.sendOTP = async () => {
+            const phone = document.getElementById('phoneInput').value;
+            if (!phone) return Swal.fire('Error', 'Enter phone number', 'error');
+            try {
+                confirmationResult = await signInWithPhoneNumber(auth, phone, window.recaptchaVerifier);
+                const { value: otp } = await Swal.fire({
+                    title: 'Enter OTP',
+                    input: 'text',
+                    inputPlaceholder: '123456'
+                });
+                if (otp) {
+                    await confirmationResult.confirm(otp);
+                }
+            } catch (error) {
+                Swal.fire('Error', error.message, 'error');
+            }
+        };
+
+        window.signInGoogle = async () => {
+            try {
+                const provider = new GoogleAuthProvider();
+                await signInWithPopup(auth, provider);
+            } catch (error) {
+                Swal.fire('Error', error.message, 'error');
+            }
+        };
+
+        // --- Email/Password auth ---
+        // isRegisterMode toggles what the single email-auth button does:
+        // false = Login (signInWithEmailAndPassword), true = Register (createUserWithEmailAndPassword).
+        // New users created here flow into the exact same onAuthStateChanged ->
+        // showOnboarding() path that phone/Google sign-ins already use, so
+        // profile setup (name, role, car details) is unchanged.
+        let isRegisterMode = false;
+
+        window.toggleAuthMode = (e) => {
+            e.preventDefault();
+            isRegisterMode = !isRegisterMode;
+            const btn = document.getElementById('emailAuthBtn');
+            const link = document.getElementById('toggleAuthModeLink');
+            if (isRegisterMode) {
+                btn.innerHTML = '<i class="fas fa-user-plus"></i> Create Account';
+                link.textContent = 'Already have an account? Login';
+            } else {
+                btn.innerHTML = '<i class="fas fa-envelope"></i> Login with Email';
+                link.textContent = 'Create an account';
+            }
+        };
+
+        window.emailLogin = async () => {
+            const email = document.getElementById('emailInput').value.trim();
+            const password = document.getElementById('passwordInput').value;
+            if (!email || !password) return Swal.fire('Error', 'Enter email and password', 'error');
+            if (isRegisterMode && password.length < 6) return Swal.fire('Error', 'Password must be at least 6 characters', 'error');
+            try {
+                if (isRegisterMode) {
+                    await createUserWithEmailAndPassword(auth, email, password);
+                } else {
+                    await signInWithEmailAndPassword(auth, email, password);
+                }
+                // onAuthStateChanged handles routing to onboarding or main app
+            } catch (error) {
+                Swal.fire('Error', error.message, 'error');
+            }
+        };
+
+        window.saveProfile = async () => {
+            const name = document.getElementById('userName').value;
+            const role = document.getElementById('userRole').value;
+            if (!name) return Swal.fire('Error', 'Enter name', 'error');
+            
+            const userData = {
+                name, role, phone: currentUser.phoneNumber || currentUser.email,
+                email: currentUser.email, photoURL: currentUser.photoURL || `https://ui-avatars.com/api/?name=${name}`,
+                rating: 5.0, totalTrips: 0, createdAt: Date.now()
+            };
+
+            if (role === 'driver' || role === 'both') {
+                userData.carDetails = {
+                    model: document.getElementById('carModel').value,
+                    plate: document.getElementById('carPlate').value,
+                    seats: parseInt(document.getElementById('carSeats').value),
+                    color: 'White'
+                };
+                userData.upiId = document.getElementById('upiId').value;
+            }
+
+            await set(ref(db, `users/${currentUser.uid}`), userData);
+            showMainApp(userData);
+        };
+
+        function showLogin() {
+            document.getElementById('loginScreen').classList.remove('hidden');
+            document.getElementById('onboardingScreen').classList.add('hidden');
+            document.getElementById('mainApp').classList.add('hidden');
+        }
+
+        function showOnboarding() {
+            document.getElementById('loginScreen').classList.add('hidden');
+            document.getElementById('onboardingScreen').classList.remove('hidden');
+            document.getElementById('mainApp').classList.add('hidden');
+            document.getElementById('userRole').addEventListener('change', (e) => {
+                document.getElementById('carDetailsSection').classList.toggle('hidden', e.target.value === 'rider');
+            });
+        }
+
+        function showMainApp(userData) {
+            document.getElementById('loginScreen').classList.add('hidden');
+            document.getElementById('onboardingScreen').classList.add('hidden');
+            document.getElementById('mainApp').classList.remove('hidden');
+            document.getElementById('welcomeText').textContent = `Hello, ${userData.name}!`;
+            document.getElementById('userAvatar').src = userData.photoURL;
+            document.getElementById('profileName').textContent = userData.name;
+            document.getElementById('profileAvatar').src = userData.photoURL;
+            document.getElementById('profileRole').textContent = userData.role.toUpperCase();
+            document.getElementById('offerRideBtn').classList.toggle('hidden', userData.role === 'rider');
+            initMap();
+            loadNearbyTrips();
+            loadMyTrips();
+            getUserLocation();
+        }
+
+        window.toggleTheme = () => {
+            const theme = document.body.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+            document.body.setAttribute('data-theme', theme);
+            localStorage.setItem('theme', theme);
+        };
+
+        window.switchTab = (tab) => {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            document.getElementById(tab + 'Tab').classList.remove('hidden');
+            event.currentTarget.classList.add('active');
+        };
+
+        window.showOfferRide = () => document.getElementById('offerRideModal').classList.remove('hidden');
+        window.closeModal = (id) => document.getElementById(id).classList.add('hidden');
+
+        window.useCurrentLocation = (type) => {
+            if (userLocation) {
+                document.getElementById(type + 'Location').value = `${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}`;
+            } else {
+                Swal.fire('Error', 'Location not available', 'error');
+            }
+        };
+
+        function getUserLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(pos => {
+                    userLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                    if (map) map.setView([userLocation.lat, userLocation.lng], 13);
+                });
+            }
+        }
+
+        function initMap() {
+            if (map) return;
+            map = L.map('map').setView([19.076, 72.8777], 11);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+        }
+
+        window.postTrip = async () => {
+            const from = document.getElementById('fromLocation').value;
+            const to = document.getElementById('toLocation').value;
+            const time = document.getElementById('departureTime').value;
+            const seats = parseInt(document.getElementById('availableSeats').value);
+            const fare = parseInt(document.getElementById('farePerSeat').value);
+            const paymentMode = document.getElementById('paymentMode').value;
+
+            if (!from || !to || !time || !seats || !fare) {
+                return Swal.fire('Error', 'Fill all fields', 'error');
+            }
+
+            const userSnap = await get(ref(db, `users/${currentUser.uid}`));
+            const userData = userSnap.val();
+
+            const tripData = {
+                driverId: currentUser.uid,
+                driverName: userData.name,
+                driverPhoto: userData.photoURL,
+                carModel: userData.carDetails?.model || 'Car',
+                carPlate: userData.carDetails?.plate || '',
+                totalSeats: seats,
+                seatsLeft: seats,
+                startLocation: { address: from, lat: userLocation?.lat || 0, lng: userLocation?.lng || 0 },
+                endLocation: { address: to, lat: 0, lng: 0 },
+                startTime: new Date(time).getTime(),
+                status: 'open',
+                farePerSeat: fare,
+                paymentMode,
+                upiId: userData.upiId || '',
+                riders: {},
+                createdAt: Date.now()
+            };
+
+            const tripRef = push(ref(db, 'trips'));
+            await set(tripRef, tripData);
+            closeModal('offerRideModal');
+            Swal.fire('Success', 'Trip posted! Riders within 0.5km can see it', 'success');
+        };
+
+        function loadNearbyTrips() {
+            onValue(ref(db, 'trips'), (snapshot) => {
+                const trips = [];
+                snapshot.forEach(child => {
+                    const trip = { id: child.key, ...child.val() };
+                    if (trip.status === 'open' && trip.seatsLeft > 0) trips.push(trip);
+                });
+                renderTrips(trips);
+            });
+        }
+
+        function renderTrips(trips) {
+            const container = document.getElementById('nearbyTrips');
+            if (trips.length === 0) {
+                container.innerHTML = '<div class="card"><p style="text-align: center; color: var(--text-light);">No trips nearby</p></div>';
+                return;
+            }
+            container.innerHTML = trips.map(trip => `
+                <div class="card trip-card">
+                    <div class="flex-between" style="margin-bottom: 12px;">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <img src="${trip.driverPhoto}" style="width: 40px; height: 40px; border-radius: 50%;">
+                            <div>
+                                <div style="font-weight: 600;">${trip.driverName}</div>
+                                <div style="font-size: 12px; color: var(--text-light);">${trip.carModel}</div>
+                            </div>
+                        </div>
+                        <div class="badge ${trip.seatsLeft > 0 ? 'badge-success' : 'badge-danger'}">
+                            ${trip.seatsLeft} seats left
+                        </div>
+                    </div>
+                    <div style="margin-bottom: 12px;">
+                        <div style="font-size: 14px; margin-bottom: 4px;"><i class="fas fa-circle" style="color: var(--success); font-size: 8px;"></i> ${trip.startLocation.address}</div>
+                        <div style="font-size: 14px;"><i class="fas fa-map-marker-alt" style="color: var(--danger); font-size: 12px;"></i> ${trip.endLocation.address}</div>
+                    </div>
+                    <div class="flex-between">
+                        <div>
+                            <div style="font-size: 20px; font-weight: 700; color: var(--primary);">₹${trip.farePerSeat}</div>
+                            <div style="font-size: 12px; color: var(--text-light);">per seat</div>
+                        </div>
+                        <button class="btn btn-primary btn-sm" onclick="requestTrip('${trip.id}')" ${trip.seatsLeft === 0 ? 'disabled' : ''}>
+                            Request
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        window.requestTrip = async (tripId) => {
+            const { value: seats } = await Swal.fire({
+                title: 'How many seats?',
+                input: 'number',
+                inputValue: 1,
+                inputAttributes: { min: 1, max: 4 }
+            });
+            if (!seats) return;
+
+            const tripRef = ref(db, `trips/${tripId}`);
+            await runTransaction(tripRef, (trip) => {
+                if (trip && trip.seatsLeft >= seats) {
+                    trip.seatsLeft -= seats;
+                    if (!trip.riders) trip.riders = {};
+                    trip.riders[currentUser.uid] = {
+                        name: auth.currentUser.displayName || 'Rider',
+                        seats: parseInt(seats),
+                        status: 'requested',
+                        requestedAt: Date.now()
+                    };
+                    if (trip.seatsLeft === 0) trip.status = 'full';
+                }
+                return trip;
+            });
+            Swal.fire('Success', 'Request sent to driver', 'success');
+        };
+
+        function loadMyTrips() {
+            onValue(ref(db, 'trips'), (snapshot) => {
+                const myTrips = [];
+                snapshot.forEach(child => {
+                    const trip = { id: child.key, ...child.val() };
+                    if (trip.driverId === currentUser.uid || trip.riders?.[currentUser.uid]) {
+                        myTrips.push(trip);
+                    }
+                });
+                document.getElementById('myTrips').innerHTML = myTrips.length ? 
+                    myTrips.map(t => `<div class="card"><div>${t.startLocation.address} → ${t.endLocation.address}</div></div>`).join('') :
+                    '<div class="card"><p style="text-align: center; color: var(--text-light);">No trips yet</p></div>';
+            });
+        }
+
+        window.logout = () => signOut(auth);
+        window.showProfile = () => switchTab('profile');
+
+        // Load theme
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        document.body.setAttribute('data-theme', savedTheme);
+
+        // Expose functions
+        window.showFindRide = () => Swal.fire('Info', 'Scroll down to see nearby trips', 'info');
+    </script>
+</body>
+</html>
