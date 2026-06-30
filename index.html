@@ -193,6 +193,9 @@
                     </div>
                 </div>
                 <div class="card">
+                    <button class="btn btn-outline btn-full" onclick="fixRiderNames()" style="color: var(--primary); margin-bottom: 10px;">
+                        <i class="fas fa-user-edit"></i> Fix Rider Names On My Trips
+                    </button>
                     <button class="btn btn-outline btn-full" onclick="logout()" style="color: var(--danger);">
                         <i class="fas fa-sign-out-alt"></i> Logout
                     </button>
@@ -571,7 +574,10 @@
             }
             container.innerHTML = trips.map(trip => {
                 const myRequest = trip.riders?.[currentUser.uid];
-                const actionHtml = myRequest
+                // If the driver rejected a prior request, treat it like no
+                // request exists yet so the rider can try requesting again
+                // (e.g. for a different seat count, or if it was a mistake).
+                const actionHtml = (myRequest && myRequest.status !== 'rejected')
                     ? `<span class="badge ${myRequest.status === 'accepted' ? 'badge-success' : 'badge-warning'}"><i class="fas fa-check"></i> ${myRequest.status === 'accepted' ? 'Accepted' : 'Requested'}</span>`
                     : `<button class="btn btn-primary btn-sm" onclick="requestTrip('${trip.id}')" ${trip.seatsLeft === 0 ? 'disabled' : ''}>Request</button>`;
                 return `
@@ -609,7 +615,15 @@
             const tripVal = tripSnap.val();
             if (!tripVal) return Swal.fire('Error', 'Trip no longer exists', 'error');
             if (tripVal.driverId === currentUser.uid) return Swal.fire('Error', 'You cannot request a seat on your own trip', 'error');
-            if (tripVal.riders && tripVal.riders[currentUser.uid]) return Swal.fire('Info', 'You already requested a seat on this trip', 'info');
+            if (tripVal.riders && tripVal.riders[currentUser.uid] && tripVal.riders[currentUser.uid].status !== 'rejected') return Swal.fire('Info', 'You already requested a seat on this trip', 'info');
+
+            // auth.currentUser.displayName is only ever set for Google sign-in.
+            // Phone OTP and Email/Password users have no displayName, which is
+            // why riders were showing up as the literal word "Rider" instead
+            // of their real name. The real name lives in users/{uid}/name
+            // from onboarding, so we read it from there instead.
+            const myProfileSnap = await get(ref(db, `users/${currentUser.uid}`));
+            const myName = myProfileSnap.val()?.name || auth.currentUser.displayName || 'Rider';
 
             const { value: seats } = await Swal.fire({
                 title: 'How many seats?',
@@ -627,7 +641,7 @@
                         trip.seatsLeft -= seatsNum;
                         if (!trip.riders) trip.riders = {};
                         trip.riders[currentUser.uid] = {
-                            name: auth.currentUser.displayName || 'Rider',
+                            name: myName,
                             seats: seatsNum,
                             status: 'requested',
                             requestedAt: Date.now()
@@ -645,6 +659,69 @@
             } catch (error) {
                 Swal.fire('Error', 'Could not send request: ' + error.message, 'error');
             }
+        };
+
+        // Driver accepts or rejects a pending rider request.
+        // Accept: just flips status to 'accepted' - seats were already
+        // deducted from seatsLeft at request time, so no seat math needed.
+        // Reject: must give the seat back (seatsLeft += rider's seat count),
+        // and if the trip had flipped to 'full' because of this rider, it
+        // needs to flip back to 'open' so other riders can request again.
+        window.respondToRequest = async (tripId, riderUid, decision) => {
+            const tripRef = ref(db, `trips/${tripId}`);
+            try {
+                const result = await runTransaction(tripRef, (trip) => {
+                    if (!trip || !trip.riders || !trip.riders[riderUid]) return; // abort, nothing to do
+                    if (trip.driverId !== currentUser.uid) return; // safety: only the driver can respond
+                    const rider = trip.riders[riderUid];
+                    if (rider.status !== 'requested') return; // already responded to, abort
+
+                    rider.status = decision;
+                    if (decision === 'rejected') {
+                        trip.seatsLeft = (trip.seatsLeft || 0) + rider.seats;
+                        if (trip.status === 'full') trip.status = 'open';
+                    }
+                    return trip;
+                });
+                if (!result.committed) {
+                    return Swal.fire('Error', 'Could not update this request - it may have already been responded to', 'error');
+                }
+                Swal.fire('Success', decision === 'accepted' ? 'Rider accepted' : 'Rider rejected, seat released', 'success');
+            } catch (error) {
+                Swal.fire('Error', 'Could not update request: ' + error.message, 'error');
+            }
+        };
+
+        // One-time repair tool: older rider requests (made before the
+        // requestTrip() name-source fix) were saved with the literal
+        // placeholder name "Rider" because auth.currentUser.displayName is
+        // null for Phone/Email sign-ins. This scans every trip the current
+        // user drives, finds riders with a missing/placeholder name, and
+        // patches it using their real name from users/{uid}/name.
+        window.fixRiderNames = async () => {
+            const tripsSnap = await get(ref(db, 'trips'));
+            const allTrips = tripsSnap.val() || {};
+            const updates = {};
+            let fixedCount = 0;
+
+            for (const [tripId, trip] of Object.entries(allTrips)) {
+                if (trip.driverId !== currentUser.uid || !trip.riders) continue;
+                for (const [riderUid, rider] of Object.entries(trip.riders)) {
+                    if (rider.name && rider.name !== 'Rider') continue; // already has a real name
+                    const riderProfileSnap = await get(ref(db, `users/${riderUid}`));
+                    const realName = riderProfileSnap.val()?.name;
+                    if (realName) {
+                        updates[`trips/${tripId}/riders/${riderUid}/name`] = realName;
+                        fixedCount++;
+                    }
+                }
+            }
+
+            if (fixedCount === 0) {
+                return Swal.fire('All Good', 'No rider names needed fixing on your trips', 'info');
+            }
+            await update(ref(db), updates);
+            Swal.fire('Fixed', `Updated ${fixedCount} rider name(s) on your trips`, 'success');
         };
 
         function loadMyTrips() {
@@ -670,7 +747,18 @@
             if (isDriver) {
                 const riderCount = trip.riders ? Object.keys(trip.riders).length : 0;
                 const ridersHtml = riderCount > 0
-                    ? Object.values(trip.riders).map(r => `<div style="font-size: 13px; padding: 4px 0; border-top: 1px solid var(--border);">${r.name} - ${r.seats} seat(s) <span class="badge ${r.status === 'accepted' ? 'badge-success' : 'badge-warning'}" style="margin-left: 6px;">${r.status}</span></div>`).join('')
+                    ? Object.entries(trip.riders).map(([riderUid, r]) => {
+                        const actionsHtml = r.status === 'requested'
+                            ? `<div style="margin-top: 4px;">
+                                 <button class="btn btn-success btn-sm" style="padding: 4px 10px; font-size: 12px;" onclick="respondToRequest('${trip.id}', '${riderUid}', 'accepted')"><i class="fas fa-check"></i> Accept</button>
+                                 <button class="btn btn-danger btn-sm" style="padding: 4px 10px; font-size: 12px; margin-left: 6px;" onclick="respondToRequest('${trip.id}', '${riderUid}', 'rejected')"><i class="fas fa-times"></i> Reject</button>
+                               </div>`
+                            : '';
+                        return `<div style="font-size: 13px; padding: 6px 0; border-top: 1px solid var(--border);">
+                                  <div class="flex-between"><span>${r.name} - ${r.seats} seat(s)</span><span class="badge ${r.status === 'accepted' ? 'badge-success' : (r.status === 'rejected' ? 'badge-danger' : 'badge-warning')}">${r.status}</span></div>
+                                  ${actionsHtml}
+                                </div>`;
+                    }).join('')
                     : '<div style="font-size: 13px; color: var(--text-light);">No requests yet</div>';
                 return `
                     <div class="card trip-card">
@@ -685,11 +773,15 @@
                     </div>`;
             } else {
                 const myReq = trip.riders[currentUser.uid];
+                const statusBadgeClass = myReq.status === 'accepted' ? 'badge-success' : (myReq.status === 'rejected' ? 'badge-danger' : 'badge-warning');
+                const footerText = myReq.status === 'rejected'
+                    ? `<i class="fas fa-info-circle"></i> Driver declined this request - seat was released`
+                    : `<i class="fas fa-clock"></i> ${dateStr} · ${myReq.seats} seat(s) booked · ₹${trip.farePerSeat * myReq.seats} total (${trip.paymentMode})`;
                 return `
                     <div class="card trip-card">
                         <div class="flex-between" style="margin-bottom: 8px;">
                             <span class="badge badge-warning">You're riding</span>
-                            <span class="badge ${myReq.status === 'accepted' ? 'badge-success' : 'badge-warning'}">${myReq.status}</span>
+                            <span class="badge ${statusBadgeClass}">${myReq.status}</span>
                         </div>
                         <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
                             <img src="${trip.driverPhoto}" style="width: 32px; height: 32px; border-radius: 50%;">
@@ -697,7 +789,7 @@
                         </div>
                         <div style="font-size: 14px; margin-bottom: 4px;"><i class="fas fa-circle" style="color: var(--success); font-size: 8px;"></i> ${trip.startLocation.address}</div>
                         <div style="font-size: 14px; margin-bottom: 8px;"><i class="fas fa-map-marker-alt" style="color: var(--danger); font-size: 12px;"></i> ${trip.endLocation.address}</div>
-                        <div style="font-size: 13px; color: var(--text-light);"><i class="fas fa-clock"></i> ${dateStr} · ${myReq.seats} seat(s) booked · ₹${trip.farePerSeat * myReq.seats} total (${trip.paymentMode})</div>
+                        <div style="font-size: 13px; color: var(--text-light);">${footerText}</div>
                     </div>`;
             }
         }
