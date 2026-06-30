@@ -553,7 +553,11 @@
                 const trips = [];
                 snapshot.forEach(child => {
                     const trip = { id: child.key, ...child.val() };
-                    if (trip.status === 'open' && trip.seatsLeft > 0) trips.push(trip);
+                    // Don't show a driver their own posted trip in "Nearby Trips" -
+                    // that belongs in My Trips, and showing it here with a
+                    // "Request" button was misleading (it would have been
+                    // blocked anyway by the requestTrip() driver-guard).
+                    if (trip.status === 'open' && trip.seatsLeft > 0 && trip.driverId !== currentUser.uid) trips.push(trip);
                 });
                 renderTrips(trips);
             });
@@ -565,7 +569,12 @@
                 container.innerHTML = '<div class="card"><p style="text-align: center; color: var(--text-light);">No trips nearby</p></div>';
                 return;
             }
-            container.innerHTML = trips.map(trip => `
+            container.innerHTML = trips.map(trip => {
+                const myRequest = trip.riders?.[currentUser.uid];
+                const actionHtml = myRequest
+                    ? `<span class="badge ${myRequest.status === 'accepted' ? 'badge-success' : 'badge-warning'}"><i class="fas fa-check"></i> ${myRequest.status === 'accepted' ? 'Accepted' : 'Requested'}</span>`
+                    : `<button class="btn btn-primary btn-sm" onclick="requestTrip('${trip.id}')" ${trip.seatsLeft === 0 ? 'disabled' : ''}>Request</button>`;
+                return `
                 <div class="card trip-card">
                     <div class="flex-between" style="margin-bottom: 12px;">
                         <div style="display: flex; align-items: center; gap: 12px;">
@@ -588,12 +597,11 @@
                             <div style="font-size: 20px; font-weight: 700; color: var(--primary);">₹${trip.farePerSeat}</div>
                             <div style="font-size: 12px; color: var(--text-light);">per seat</div>
                         </div>
-                        <button class="btn btn-primary btn-sm" onclick="requestTrip('${trip.id}')" ${trip.seatsLeft === 0 ? 'disabled' : ''}>
-                            Request
-                        </button>
+                        ${actionHtml}
                     </div>
                 </div>
-            `).join('');
+            `;
+            }).join('');
         }
 
         window.requestTrip = async (tripId) => {
@@ -648,10 +656,50 @@
                         myTrips.push(trip);
                     }
                 });
-                document.getElementById('myTrips').innerHTML = myTrips.length ? 
-                    myTrips.map(t => `<div class="card"><div>${t.startLocation.address} → ${t.endLocation.address}</div></div>`).join('') :
+                myTrips.sort((a, b) => b.startTime - a.startTime);
+                document.getElementById('myTrips').innerHTML = myTrips.length ?
+                    myTrips.map(t => renderMyTripCard(t)).join('') :
                     '<div class="card"><p style="text-align: center; color: var(--text-light);">No trips yet</p></div>';
             });
+        }
+
+        function renderMyTripCard(trip) {
+            const isDriver = trip.driverId === currentUser.uid;
+            const dateStr = trip.startTime ? dayjs(trip.startTime).format('DD MMM, h:mm A') : '';
+
+            if (isDriver) {
+                const riderCount = trip.riders ? Object.keys(trip.riders).length : 0;
+                const ridersHtml = riderCount > 0
+                    ? Object.values(trip.riders).map(r => `<div style="font-size: 13px; padding: 4px 0; border-top: 1px solid var(--border);">${r.name} - ${r.seats} seat(s) <span class="badge ${r.status === 'accepted' ? 'badge-success' : 'badge-warning'}" style="margin-left: 6px;">${r.status}</span></div>`).join('')
+                    : '<div style="font-size: 13px; color: var(--text-light);">No requests yet</div>';
+                return `
+                    <div class="card trip-card">
+                        <div class="flex-between" style="margin-bottom: 8px;">
+                            <span class="badge badge-success">You're driving</span>
+                            <span class="badge ${trip.status === 'open' ? 'badge-success' : 'badge-warning'}">${trip.status}</span>
+                        </div>
+                        <div style="font-size: 14px; margin-bottom: 4px;"><i class="fas fa-circle" style="color: var(--success); font-size: 8px;"></i> ${trip.startLocation.address}</div>
+                        <div style="font-size: 14px; margin-bottom: 8px;"><i class="fas fa-map-marker-alt" style="color: var(--danger); font-size: 12px;"></i> ${trip.endLocation.address}</div>
+                        <div style="font-size: 13px; color: var(--text-light); margin-bottom: 8px;"><i class="fas fa-clock"></i> ${dateStr} · ${trip.seatsLeft}/${trip.totalSeats} seats left · ₹${trip.farePerSeat}/seat</div>
+                        <div style="margin-top: 8px;"><strong style="font-size: 13px;">Riders (${riderCount})</strong>${ridersHtml}</div>
+                    </div>`;
+            } else {
+                const myReq = trip.riders[currentUser.uid];
+                return `
+                    <div class="card trip-card">
+                        <div class="flex-between" style="margin-bottom: 8px;">
+                            <span class="badge badge-warning">You're riding</span>
+                            <span class="badge ${myReq.status === 'accepted' ? 'badge-success' : 'badge-warning'}">${myReq.status}</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                            <img src="${trip.driverPhoto}" style="width: 32px; height: 32px; border-radius: 50%;">
+                            <div style="font-size: 13px;"><strong>${trip.driverName}</strong> · ${trip.carModel} ${trip.carPlate ? '(' + trip.carPlate + ')' : ''}</div>
+                        </div>
+                        <div style="font-size: 14px; margin-bottom: 4px;"><i class="fas fa-circle" style="color: var(--success); font-size: 8px;"></i> ${trip.startLocation.address}</div>
+                        <div style="font-size: 14px; margin-bottom: 8px;"><i class="fas fa-map-marker-alt" style="color: var(--danger); font-size: 12px;"></i> ${trip.endLocation.address}</div>
+                        <div style="font-size: 13px; color: var(--text-light);"><i class="fas fa-clock"></i> ${dateStr} · ${myReq.seats} seat(s) booked · ₹${trip.farePerSeat * myReq.seats} total (${trip.paymentMode})</div>
+                    </div>`;
+            }
         }
 
         window.logout = () => signOut(auth);
