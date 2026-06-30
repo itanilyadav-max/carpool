@@ -392,6 +392,8 @@
             document.getElementById('loginScreen').classList.remove('hidden');
             document.getElementById('onboardingScreen').classList.add('hidden');
             document.getElementById('mainApp').classList.add('hidden');
+            if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+            userMarker = null;
         }
 
         function showOnboarding() {
@@ -413,10 +415,20 @@
             document.getElementById('profileAvatar').src = userData.photoURL;
             document.getElementById('profileRole').textContent = userData.role.toUpperCase();
             document.getElementById('offerRideBtn').classList.toggle('hidden', userData.role === 'rider');
-            initMap();
+            // initMap() must run AFTER the #map container is actually visible
+            // and the browser has painted - Leaflet measures the container's
+            // pixel size at init time. If #map still has display:none (even
+            // for one tick right after removing 'hidden' from its parent),
+            // Leaflet computes a broken/zero size, and markers added after
+            // that silently fail to render even though no error is thrown.
+            // requestAnimationFrame waits for the next paint before initializing.
+            requestAnimationFrame(() => {
+                initMap();
+                map.invalidateSize();
+                getUserLocation();
+            });
             loadNearbyTrips();
             loadMyTrips();
-            getUserLocation();
         }
 
         window.toggleTheme = () => {
@@ -430,6 +442,13 @@
             document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
             document.getElementById(tab + 'Tab').classList.remove('hidden');
             event.currentTarget.classList.add('active');
+            // Re-measure the map whenever the Home tab (which contains #map)
+            // becomes visible again - Leaflet's cached size goes stale after
+            // its container has been display:none, otherwise tiles/markers
+            // can appear shifted or missing until the user manually drags the map.
+            if (tab === 'home' && map) {
+                requestAnimationFrame(() => map.invalidateSize());
+            }
         };
 
         window.showOfferRide = () => document.getElementById('offerRideModal').classList.remove('hidden');
@@ -443,13 +462,44 @@
             }
         };
 
+        let userMarker = null;
+        let watchId = null;
+
         function getUserLocation() {
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(pos => {
-                    userLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-                    if (map) map.setView([userLocation.lat, userLocation.lng], 13);
-                });
+            if (!navigator.geolocation) {
+                return Swal.fire('Error', 'Geolocation is not supported by this browser', 'error');
             }
+            // watchPosition (not getCurrentPosition) so the marker keeps
+            // updating as the user moves - this is what makes it "live".
+            watchId = navigator.geolocation.watchPosition(
+                pos => {
+                    userLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                    if (!map) return;
+                    if (!userMarker) {
+                        // Custom blue dot icon so it's visually distinct from trip pins.
+                        const liveIcon = L.divIcon({
+                            className: 'live-location-marker',
+                            html: '<div style="width:16px;height:16px;background:#0ea5e9;border:3px solid white;border-radius:50%;box-shadow:0 0 0 4px rgba(14,165,233,0.3);"></div>',
+                            iconSize: [16, 16],
+                            iconAnchor: [8, 8]
+                        });
+                        userMarker = L.marker([userLocation.lat, userLocation.lng], { icon: liveIcon, zIndexOffset: 1000 })
+                            .addTo(map)
+                            .bindPopup('You are here');
+                        map.setView([userLocation.lat, userLocation.lng], 13);
+                    } else {
+                        userMarker.setLatLng([userLocation.lat, userLocation.lng]);
+                    }
+                },
+                err => {
+                    // Most common cause: user denied the location permission prompt,
+                    // or the page isn't served over HTTPS (required by browsers
+                    // for geolocation, except on localhost).
+                    console.warn('Geolocation error:', err.message);
+                    Swal.fire('Location unavailable', 'Could not get your live location: ' + err.message + '. Check that location access is allowed for this site.', 'warning');
+                },
+                { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
+            );
         }
 
         function initMap() {
