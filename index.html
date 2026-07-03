@@ -113,9 +113,9 @@
             </p>
         </div>
 
-        <!-- Onboarding Screen -->
+        <!-- Onboarding Screen (also reused for Edit Profile — see editProfile()) -->
         <div id="onboardingScreen" class="hidden" style="padding: 20px;">
-            <h2>Complete Your Profile</h2>
+            <h2 id="onboardingHeading">Complete Your Profile</h2>
             <div class="input-group">
                 <label>Full Name</label>
                 <input type="text" id="userName" class="input" placeholder="John Doe">
@@ -137,19 +137,29 @@
                 </select>
             </div>
             <div id="carDetailsSection" class="hidden">
-                <h3 style="margin: 20px 0 10px;">Car Details & Driver Verification</h3>
+                <h3 style="margin: 20px 0 10px;">Vehicle Details & Driver Verification</h3>
                 <div class="input-group">
-                    <label>Car Model</label>
+                    <label>Vehicle Type</label>
+                    <select id="vehicleType" class="input" onchange="onVehicleTypeChange()">
+                        <option value="car">Car</option>
+                        <option value="bike">Bike / Two-Wheeler</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label id="vehicleModelLabel">Car Model</label>
                     <input type="text" id="carModel" class="input" placeholder="Honda City">
                 </div>
                 <div class="input-group">
                     <label>Plate Number</label>
                     <input type="text" id="carPlate" class="input" placeholder="MH12AB1234">
                 </div>
-                <div class="input-group">
+                <div class="input-group" id="carSeatsGroup">
                     <label>Total Seats</label>
                     <input type="number" id="carSeats" class="input" placeholder="4" min="2" max="8">
                 </div>
+                <p id="bikeSeatsNote" class="hidden" style="font-size: 13px; color: var(--text-light); margin: -8px 0 16px;">
+                    <i class="fas fa-info-circle"></i> Bike rides carry 1 pillion rider only.
+                </p>
                 <div class="input-group">
                     <label>UPI ID for Payments</label>
                     <input type="text" id="upiId" class="input" placeholder="yourname@upi">
@@ -159,16 +169,29 @@
                     <input type="text" id="carDL" class="input" placeholder="DL-1420230012345">
                 </div>
                 <div class="input-group">
-                    <label>Registration Certificate (RC) Number</label>
+                    <label id="vehicleRCLabel">Registration Certificate (RC) Number</label>
                     <input type="text" id="carRC" class="input" placeholder="MH12AB9999">
                 </div>
                 <div class="input-group">
                     <label>Upload Documents (DL & RC Image)</label>
                     <input type="file" id="driverDocs" class="input" accept="image/*" multiple>
+                    <div id="existingDocsPreview" style="margin-top: 8px;"></div>
+                    <p style="font-size: 12px; color: var(--text-light); margin-top: 4px;">Leave empty to keep your existing documents.</p>
                 </div>
             </div>
+            <div class="input-group" style="margin-top: 10px;">
+                <label>Emergency Contact Name <span style="font-weight: 400; color: var(--text-light);">(optional, for SOS)</span></label>
+                <input type="text" id="emergContactName" class="input" placeholder="e.g. Spouse, Parent, Friend">
+            </div>
+            <div class="input-group">
+                <label>Emergency Contact Phone <span style="font-weight: 400; color: var(--text-light);">(optional, for SOS)</span></label>
+                <input type="tel" id="emergContactPhone" class="input" placeholder="+91 98765 43210">
+            </div>
             <button class="btn btn-primary btn-full" onclick="saveProfile()">Continue</button>
+            <button id="cancelEditProfileBtn" class="btn btn-outline btn-full hidden" style="margin-top: 10px;" onclick="showMainApp(window.__cachedUserData)">Cancel</button>
         </div>
+
+
 
         <!-- Main App -->
         <div id="mainApp" class="hidden">
@@ -243,6 +266,9 @@
                     </div>
                 </div>
                 <div class="card">
+                    <button class="btn btn-outline btn-full" onclick="editProfile()" style="color: var(--primary); margin-bottom: 10px;">
+                        <i class="fas fa-user-cog"></i> Edit Profile
+                    </button>
                     <button class="btn btn-outline btn-full" onclick="fixRiderNames()" style="color: var(--primary); margin-bottom: 10px;">
                         <i class="fas fa-user-edit"></i> Fix Rider Names On My Trips
                     </button>
@@ -368,6 +394,9 @@
             </div>
 
             <div style="flex-grow: 1; overflow-y: auto;">
+                <h4 style="margin-bottom: 8px;"><i class="fas fa-id-card" style="color:var(--danger);"></i> Pending KYC Verifications</h4>
+                <div id="adminKycList" style="margin-bottom: 20px;"></div>
+
                 <h4 style="margin-bottom: 8px;">Active Trips</h4>
                 <div id="adminTripsList" style="margin-bottom: 20px;"></div>
                 
@@ -381,6 +410,7 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getAuth, signInWithPhoneNumber, RecaptchaVerifier, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
         import { getDatabase, ref, set, push, onValue, update, get, runTransaction, query, orderByChild, equalTo, remove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+        import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyD67KfythGb-uX09OyIqmZFPBfAOEFhjKg",
@@ -395,6 +425,7 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getDatabase(app);
+        const storage = getStorage(app);
         let currentUser = null;
         let userLocation = null;
         let map = null;
@@ -485,35 +516,163 @@
             }
         };
 
+        // Toggles form labels & the seats field between Car mode and Bike mode.
+        // Bike rides only ever carry 1 pillion rider, so that field is hidden and
+        // fixed to 1 instead of asking the driver to type a seat count.
+        window.onVehicleTypeChange = () => {
+            const type = document.getElementById('vehicleType').value;
+            const isBike = type === 'bike';
+            document.getElementById('vehicleModelLabel').textContent = isBike ? 'Bike Model' : 'Car Model';
+            document.getElementById('carModel').placeholder = isBike ? 'Activa / Pulsar 150' : 'Honda City';
+            document.getElementById('vehicleRCLabel').textContent = isBike ? 'Registration Certificate (RC) Number' : 'Registration Certificate (RC) Number';
+            document.getElementById('carSeatsGroup').classList.toggle('hidden', isBike);
+            document.getElementById('bikeSeatsNote').classList.toggle('hidden', !isBike);
+            if (isBike) document.getElementById('carSeats').value = 1;
+        };
+
+        // Uploads whatever files were picked in the "Upload Documents" input to Firebase
+        // Storage under this driver's own uid, and returns their public download URLs.
+        // Used so KYC review has real documents to look at, instead of the DL/RC number
+        // fields alone (which anyone could type without owning that document).
+        async function uploadDriverDocs(uid) {
+            const filesInput = document.getElementById('driverDocs');
+            const files = filesInput?.files;
+            if (!files || files.length === 0) return [];
+
+            const urls = [];
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const path = `driver-docs/${uid}/${Date.now()}_${file.name}`;
+                const fileRef = storageRef(storage, path);
+                await uploadBytes(fileRef, file);
+                const url = await getDownloadURL(fileRef);
+                urls.push(url);
+            }
+            return urls;
+        }
+
+        // Opens the same form used for first-time onboarding, but pre-filled with the
+        // user's current data and in "edit" mode — this is the Edit Profile screen the
+        // app was missing entirely before. Works for updating name/gender/role, adding
+        // or removing vehicle details (including switching rider -> driver later), UPI,
+        // DL/RC, re-uploading documents, and setting an emergency contact.
+        window.editProfile = async () => {
+            const userSnap = await get(ref(db, `users/${currentUser.uid}`));
+            const userData = userSnap.val() || {};
+            window.__cachedUserData = userData;
+            window.__editingProfile = true;
+
+            document.getElementById('userName').value = userData.name || '';
+            document.getElementById('userGender').value = userData.gender || 'male';
+            document.getElementById('userRole').value = userData.role || 'rider';
+            document.getElementById('emergContactName').value = userData.emergencyContact?.name || '';
+            document.getElementById('emergContactPhone').value = userData.emergencyContact?.phone || '';
+
+            const showVehicle = userData.role === 'driver' || userData.role === 'both';
+            document.getElementById('carDetailsSection').classList.toggle('hidden', !showVehicle);
+            document.getElementById('vehicleType').value = userData.vehicleType || 'car';
+            onVehicleTypeChange();
+            document.getElementById('carModel').value = userData.carDetails?.model || '';
+            document.getElementById('carPlate').value = userData.carDetails?.plate || '';
+            if (userData.carDetails?.seats) document.getElementById('carSeats').value = userData.carDetails.seats;
+            document.getElementById('upiId').value = userData.upiId || '';
+            document.getElementById('carDL').value = userData.carDetails?.dl || '';
+            document.getElementById('carRC').value = userData.carDetails?.rc || '';
+            document.getElementById('driverDocs').value = '';
+
+            const docs = userData.carDetails?.docUrls || [];
+            document.getElementById('existingDocsPreview').innerHTML = docs.length > 0
+                ? docs.map(url => `<a href="${url}" target="_blank"><img src="${url}" style="width:48px; height:48px; object-fit:cover; border-radius:6px; border:1px solid var(--border); margin-right:6px;"></a>`).join('')
+                : '';
+
+            document.getElementById('userRole').onchange = (e) => {
+                document.getElementById('carDetailsSection').classList.toggle('hidden', e.target.value === 'rider');
+            };
+
+            document.getElementById('onboardingHeading').textContent = 'Edit Your Profile';
+            document.getElementById('cancelEditProfileBtn').classList.remove('hidden');
+            document.getElementById('loginScreen').classList.add('hidden');
+            document.getElementById('mainApp').classList.add('hidden');
+            document.getElementById('onboardingScreen').classList.remove('hidden');
+        };
+
         window.saveProfile = async () => {
             const name = document.getElementById('userName').value;
             const role = document.getElementById('userRole').value;
             const gender = document.getElementById('userGender').value;
             if (!name) return Swal.fire('Error', 'Enter name', 'error');
-            
+
+            // Editing an existing profile? Start from what's already saved so stats
+            // (rating, totalTrips, co2Saved, createdAt, kycStatus, isBanned...) survive
+            // the save instead of getting wiped back to defaults.
+            const isEditing = !!window.__editingProfile;
+            const existing = isEditing ? (window.__cachedUserData || {}) : {};
+
             const userData = {
+                ...existing,
                 name, role, gender, phone: currentUser.phoneNumber || currentUser.email,
-                email: currentUser.email, photoURL: currentUser.photoURL || `https://ui-avatars.com/api/?name=${name}`,
-                rating: 5.0, totalTrips: 0, co2Saved: 0, createdAt: Date.now()
+                email: currentUser.email, photoURL: existing.photoURL || currentUser.photoURL || `https://ui-avatars.com/api/?name=${name}`,
+                rating: existing.rating ?? 5.0, totalTrips: existing.totalTrips ?? 0, co2Saved: existing.co2Saved ?? 0,
+                createdAt: existing.createdAt ?? Date.now()
+            };
+
+            userData.emergencyContact = {
+                name: document.getElementById('emergContactName').value || '',
+                phone: document.getElementById('emergContactPhone').value || ''
             };
 
             if (role === 'driver' || role === 'both') {
+                const vehicleType = document.getElementById('vehicleType').value;
+                const dl = document.getElementById('carDL').value || '';
+                const rc = document.getElementById('carRC').value || '';
+                const newFilesPicked = document.getElementById('driverDocs').files.length > 0;
+
+                userData.vehicleType = vehicleType;
                 userData.carDetails = {
                     model: document.getElementById('carModel').value,
                     plate: document.getElementById('carPlate').value,
-                    seats: parseInt(document.getElementById('carSeats').value),
+                    seats: vehicleType === 'bike' ? 1 : parseInt(document.getElementById('carSeats').value),
                     color: 'White',
-                    dl: document.getElementById('carDL').value || '',
-                    rc: document.getElementById('carRC').value || ''
+                    dl, rc,
+                    docUrls: existing.carDetails?.docUrls || []
                 };
                 userData.upiId = document.getElementById('upiId').value;
-                // Auto verify on upload for demonstration
-                userData.kycStatus = (userData.carDetails.dl && userData.carDetails.rc) ? 'verified' : 'none';
+
+                if (newFilesPicked) {
+                    Swal.fire({ title: 'Uploading documents...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+                    try {
+                        userData.carDetails.docUrls = await uploadDriverDocs(currentUser.uid);
+                    } catch (e) {
+                        Swal.close();
+                        return Swal.fire('Upload Failed', 'Could not upload your documents: ' + e.message + '. Please try again.', 'error');
+                    }
+                    Swal.close();
+                }
+
+                // Real verification requires a human to actually look at the uploaded
+                // DL/RC photos and confirm they match the typed numbers — that review
+                // happens in the Admin panel. A driver only sits as "verified" if an
+                // admin has already approved these exact DL/RC + documents; changing
+                // any of them (or verifying for the first time) drops back to "pending"
+                // until reviewed again.
+                const dlRcChanged = existing.carDetails?.dl !== dl || existing.carDetails?.rc !== rc;
+                const hasDocs = userData.carDetails.docUrls.length > 0;
+                if (!dl || !rc || !hasDocs) {
+                    userData.kycStatus = 'none';
+                } else if (existing.kycStatus === 'verified' && !dlRcChanged && !newFilesPicked) {
+                    userData.kycStatus = 'verified'; // nothing verification-relevant changed, keep it
+                } else {
+                    userData.kycStatus = 'pending';
+                }
             } else {
                 userData.kycStatus = 'none';
+                delete userData.vehicleType;
+                delete userData.carDetails;
+                delete userData.upiId;
             }
 
             await set(ref(db, `users/${currentUser.uid}`), userData);
+            window.__editingProfile = false;
             showMainApp(userData);
         };
 
@@ -526,6 +685,9 @@
         }
 
         function showOnboarding() {
+            window.__editingProfile = false;
+            document.getElementById('onboardingHeading').textContent = 'Complete Your Profile';
+            document.getElementById('cancelEditProfileBtn').classList.add('hidden');
             document.getElementById('loginScreen').classList.add('hidden');
             document.getElementById('onboardingScreen').classList.remove('hidden');
             document.getElementById('mainApp').classList.add('hidden');
@@ -535,6 +697,7 @@
         }
 
         function showMainApp(userData) {
+            window.__cachedUserData = userData; // used by editProfile() and the Edit-screen Cancel button
             document.getElementById('loginScreen').classList.add('hidden');
             document.getElementById('onboardingScreen').classList.add('hidden');
             document.getElementById('mainApp').classList.remove('hidden');
@@ -587,7 +750,25 @@
             }
         };
 
-        window.showOfferRide = () => document.getElementById('offerRideModal').classList.remove('hidden');
+        // Bike drivers can only offer 1 pillion seat, so the seat input gets locked
+        // down to reflect that the moment the modal opens — instead of letting a bike
+        // driver type "4 seats available" which the vehicle physically can't carry.
+        window.showOfferRide = async () => {
+            document.getElementById('offerRideModal').classList.remove('hidden');
+            const userSnap = await get(ref(db, `users/${currentUser.uid}`));
+            const userData = userSnap.val() || {};
+            const seatsInput = document.getElementById('availableSeats');
+            if (userData.vehicleType === 'bike') {
+                seatsInput.value = 1;
+                seatsInput.max = 1;
+                seatsInput.disabled = true;
+            } else {
+                seatsInput.max = 7;
+                seatsInput.disabled = false;
+                if (seatsInput.value == 1 && seatsInput.dataset.lockedForBike) seatsInput.value = 3;
+            }
+            seatsInput.dataset.lockedForBike = userData.vehicleType === 'bike' ? '1' : '';
+        };
         window.closeModal = (id) => document.getElementById(id).classList.add('hidden');
 
         window.useCurrentLocation = (type) => {
@@ -668,6 +849,40 @@
             return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         }
 
+        // Straight-line ("as the crow flies") distance was being used for fare — which
+        // is wrong for real roads (rivers, one-ways, no direct road existing, etc. all
+        // make the actual drivable distance longer). This calls OSRM's free public
+        // routing API to get the real road distance & duration instead. If OSRM is
+        // unreachable, falls back to straight-line distance *1.3 (a rough, commonly-used
+        // detour-factor estimate) and is upfront in the UI that it's an estimate, not a
+        // real route.
+        async function getRoadDistanceKm(start, end) {
+            try {
+                const url = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=false`;
+                const res = await fetch(url);
+                const data = await res.json();
+                if (data.code === 'Ok' && data.routes?.[0]) {
+                    return { km: data.routes[0].distance / 1000, minutes: Math.round(data.routes[0].duration / 60), isRealRoute: true };
+                }
+            } catch (e) {
+                console.error('Routing error, falling back to straight-line estimate:', e);
+            }
+            const straightLine = calculateDistance(start.lat, start.lng, end.lat, end.lng);
+            return { km: straightLine * 1.3, minutes: null, isRealRoute: false };
+        }
+
+        // A real traffic-based price would need a paid traffic API (Google Directions
+        // with traffic model, etc.) which this app doesn't have. As a reasonable free
+        // substitute, this applies a fixed surcharge during India's typical weekday rush
+        // hours based on the selected departure time — clearly labeled as such, not
+        // dressed up as live traffic data.
+        function getPeakHourInfo(departureTimeStr) {
+            if (!departureTimeStr) return { isPeak: false, hour: null };
+            const hour = new Date(departureTimeStr).getHours();
+            const isPeak = (hour >= 8 && hour < 11) || (hour >= 17 && hour < 21);
+            return { isPeak, hour };
+        }
+
         window.estimateTripFare = async () => {
             const fromAddr = document.getElementById('fromLocation').value;
             const toAddr = document.getElementById('toLocation').value;
@@ -675,25 +890,41 @@
                 return Swal.fire('Fields empty', 'Please fill start and destination locations', 'warning');
             }
             Swal.fire({
-                title: 'Calculating distance...',
+                title: 'Calculating route...',
                 allowOutsideClick: false,
                 didOpen: () => { Swal.showLoading(); }
             });
             const start = await geocodeAddress(fromAddr);
             const end = await geocodeAddress(toAddr);
-            Swal.close();
 
             if (start && end) {
-                const dist = calculateDistance(start.lat, start.lng, end.lat, end.lng);
-                const suggested = Math.round(dist * 8); // Suggested: ₹8/km
+                const route = await getRoadDistanceKm(start, end);
+                Swal.close();
+
+                const userSnap = await get(ref(db, `users/${currentUser.uid}`));
+                const userData = userSnap.val() || {};
+                const baseRatePerKm = userData.vehicleType === 'bike' ? 4 : 8; // bikes cost less to run than cars
+
+                const departureTimeStr = document.getElementById('departureTime').value;
+                const { isPeak, hour } = getPeakHourInfo(departureTimeStr);
+                const ratePerKm = isPeak ? baseRatePerKm * 1.15 : baseRatePerKm;
+                const suggested = Math.round(route.km * ratePerKm);
+
                 document.getElementById('farePerSeat').value = suggested;
+                const routeNote = route.isRealRoute
+                    ? `Road distance: <strong>${route.km.toFixed(1)} km</strong>${route.minutes ? ` (~${route.minutes} min)` : ''}`
+                    : `Estimated distance: <strong>~${route.km.toFixed(1)} km</strong> <span style="font-size:11px; color:var(--text-light);">(route service unavailable, straight-line estimate)</span>`;
+                const peakNote = isPeak
+                    ? `<br><span style="color:var(--danger); font-size:12px;"><i class="fas fa-clock"></i> Peak hours (${hour}:00) — +15% traffic surcharge applied</span>`
+                    : '';
                 document.getElementById('fareSuggestionText').innerHTML = `
-                    <i class="fas fa-route"></i> Distance: <strong>${dist.toFixed(1)} km</strong><br>
-                    Suggested Fare (₹8/km): <strong>₹${suggested}</strong>
+                    <i class="fas fa-route"></i> ${routeNote}<br>
+                    Suggested Fare (₹${baseRatePerKm}/km${isPeak ? ' + peak surcharge' : ''}): <strong>₹${suggested}</strong>${peakNote}
                 `;
                 window.tempFromCoords = start;
                 window.tempToCoords = end;
             } else {
+                Swal.close();
                 Swal.fire('Failed', 'Could not locate addresses. Please try again.', 'error');
             }
         };
@@ -727,13 +958,18 @@
             const userSnap = await get(ref(db, `users/${currentUser.uid}`));
             const userData = userSnap.val();
 
+            if (userData.vehicleType === 'bike' && seats > 1) {
+                return Swal.fire('Error', 'Bike rides can only offer 1 pillion seat', 'error');
+            }
+
             const tripData = {
                 driverId: currentUser.uid,
                 driverName: userData.name,
                 driverPhoto: userData.photoURL,
                 driverGender: userData.gender || 'male',
                 driverVerified: userData.kycStatus === 'verified',
-                carModel: userData.carDetails?.model || 'Car',
+                vehicleType: userData.vehicleType || 'car',
+                carModel: userData.carDetails?.model || (userData.vehicleType === 'bike' ? 'Bike' : 'Car'),
                 carPlate: userData.carDetails?.plate || '',
                 totalSeats: seats,
                 seatsLeft: seats,
@@ -819,7 +1055,7 @@
                                     ${verifiedShield}
                                     ${womenOnlyBadge}
                                 </div>
-                                <div style="font-size: 12px; color: var(--text-light);">${trip.carModel}</div>
+                                <div style="font-size: 12px; color: var(--text-light);"><i class="fas ${trip.vehicleType === 'bike' ? 'fa-motorcycle' : 'fa-car-side'}"></i> ${trip.carModel}</div>
                             </div>
                         </div>
                         <div class="badge ${trip.seatsLeft > 0 ? 'badge-success' : 'badge-danger'}">
@@ -1003,6 +1239,80 @@
             }
             banner.style.display = 'block';
         });
+
+        // Driver cancels their own posted trip — only allowed before it's actually
+        // started (once a trip is 'started' or 'completed', cancelling makes no sense).
+        // Every accepted/pending rider gets their status flipped to 'rejected' so their
+        // own trip card clearly shows the driver cancelled, instead of leaving them
+        // waiting on a trip that's quietly dead.
+        window.cancelMyTrip = async (tripId) => {
+            const confirm = await Swal.fire({
+                title: 'Cancel this trip?',
+                text: 'All riders will be notified and their seats released.',
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonText: 'Yes, cancel it',
+                confirmButtonColor: '#ef4444'
+            });
+            if (!confirm.isConfirmed) return;
+
+            const tripRef = ref(db, `trips/${tripId}`);
+            try {
+                const result = await runTransaction(tripRef, (trip) => {
+                    if (!trip || trip.driverId !== currentUser.uid) return;
+                    if (trip.status !== 'open' && trip.status !== 'full') return; // already started/completed/cancelled
+                    trip.status = 'cancelled';
+                    trip.cancelledBy = 'driver';
+                    if (trip.riders) {
+                        Object.values(trip.riders).forEach(r => {
+                            if (r.status === 'requested' || r.status === 'accepted') r.status = 'rejected';
+                        });
+                    }
+                    return trip;
+                });
+                if (!result.committed) {
+                    return Swal.fire('Error', 'This trip can no longer be cancelled (it may have already started).', 'error');
+                }
+                Swal.fire('Trip Cancelled', 'Your trip has been cancelled and riders notified.', 'success');
+            } catch (error) {
+                Swal.fire('Error', 'Could not cancel trip: ' + error.message, 'error');
+            }
+        };
+
+        // Rider cancels their own request/booking — releases their seats back to the
+        // trip so someone else can book them, only allowed before the trip has started.
+        window.cancelMyRequest = async (tripId) => {
+            const confirm = await Swal.fire({
+                title: 'Cancel your request?',
+                text: 'Your seat(s) will be released back to the driver.',
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonText: 'Yes, cancel it',
+                confirmButtonColor: '#ef4444'
+            });
+            if (!confirm.isConfirmed) return;
+
+            const tripRef = ref(db, `trips/${tripId}`);
+            try {
+                const result = await runTransaction(tripRef, (trip) => {
+                    if (!trip || !trip.riders || !trip.riders[currentUser.uid]) return;
+                    if (trip.status !== 'open' && trip.status !== 'full') return; // trip already started/completed/cancelled
+                    const rider = trip.riders[currentUser.uid];
+                    if (rider.status !== 'requested' && rider.status !== 'accepted') return;
+
+                    trip.seatsLeft = (trip.seatsLeft || 0) + rider.seats;
+                    if (trip.status === 'full') trip.status = 'open';
+                    rider.status = 'cancelled';
+                    return trip;
+                });
+                if (!result.committed) {
+                    return Swal.fire('Error', 'This request can no longer be cancelled (the trip may have already started).', 'error');
+                }
+                Swal.fire('Cancelled', 'Your request has been cancelled and seat released.', 'success');
+            } catch (error) {
+                Swal.fire('Error', 'Could not cancel request: ' + error.message, 'error');
+            }
+        };
 
         // Driver responds to request
         window.respondToRequest = async (tripId, riderUid, decision) => {
@@ -1309,19 +1619,42 @@
             const trip = tripSnap.val();
             if (!trip) return;
 
+            // This part IS real: setting sosTriggered=true is what makes the red SOS
+            // banner pop up automatically for the driver and every other rider on this
+            // trip (see the sosTriggered watcher in loadMyTrips) — no tap needed on their end.
             await update(ref(db, `trips/${tripId}`), { sosTriggered: true });
+
+            const userSnap = await get(ref(db, `users/${currentUser.uid}`));
+            const emergencyContact = userSnap.val()?.emergencyContact;
 
             const coords = userLocation ? `${userLocation.lat.toFixed(6)},${userLocation.lng.toFixed(6)}` : 'Unknown';
             const shareUrl = `https://maps.google.com/?q=${coords}`;
             const message = `EMERGENCY! I am on a RideShare carpool trip. Start: ${trip.startLocation.address}. Destination: ${trip.endLocation.address}. Live Position: ${shareUrl}`;
 
+            // Browsers won't let a webpage silently send a WhatsApp/SMS message on its
+            // own — the person has to actually tap the link. So instead of falsely
+            // claiming it's already sent, this is upfront about that one extra tap, and
+            // at least pre-addresses it to the saved emergency contact so it's a single tap.
+            const contactPhone = emergencyContact?.phone ? emergencyContact.phone.replace(/[^\d+]/g, '') : '';
+            const waLink = contactPhone
+                ? `https://wa.me/${contactPhone.replace('+', '')}?text=${encodeURIComponent(message)}`
+                : `https://wa.me/?text=${encodeURIComponent(message)}`;
+            const smsLink = contactPhone
+                ? `sms:${contactPhone}?body=${encodeURIComponent(message)}`
+                : `sms:?body=${encodeURIComponent(message)}`;
+            const contactNote = contactPhone
+                ? `<p style="font-size:13px; color:var(--text-light); margin-bottom:10px;">Pre-filled for your emergency contact: ${emergencyContact.name || contactPhone}</p>`
+                : `<p style="font-size:13px; color:var(--danger); margin-bottom:10px;"><i class="fas fa-exclamation-triangle"></i> No emergency contact saved. <a href="#" onclick="closeSwalAndEditProfile(event)">Add one now</a> so this is ready next time.</p>`;
+
             Swal.fire({
                 title: 'SOS Emergency Alert!',
                 html: `
-                    <p style="color:var(--danger);font-weight:bold;margin-bottom:15px;">Your emergency contacts and other riders have been alerted.</p>
+                    <p style="color:var(--danger);font-weight:bold;margin-bottom:6px;">The driver and other riders on this trip have been alerted automatically.</p>
+                    <p style="font-weight:600;margin-bottom:15px;">Tap below to also alert your emergency contact or the police:</p>
+                    ${contactNote}
                     <div style="display:flex;flex-direction:column;gap:10px;">
-                        <a href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" class="btn btn-success btn-full" style="text-decoration:none;"><i class="fab fa-whatsapp"></i> Share on WhatsApp</a>
-                        <a href="sms:?body=${encodeURIComponent(message)}" class="btn btn-primary btn-full"><i class="fas fa-sms"></i> Share via SMS</a>
+                        <a href="${waLink}" target="_blank" class="btn btn-success btn-full" style="text-decoration:none;"><i class="fab fa-whatsapp"></i> Send on WhatsApp</a>
+                        <a href="${smsLink}" class="btn btn-primary btn-full"><i class="fas fa-sms"></i> Send via SMS</a>
                         <a href="tel:112" class="btn btn-danger btn-full"><i class="fas fa-phone-alt"></i> Call Emergency (112)</a>
                     </div>
                 `,
@@ -1332,6 +1665,12 @@
                     await update(ref(db, `trips/${tripId}`), { sosTriggered: false });
                 }
             });
+        };
+
+        window.closeSwalAndEditProfile = (e) => {
+            e.preventDefault();
+            Swal.close();
+            editProfile();
         };
 
         // --- Receipt and Re-book ---
@@ -1401,7 +1740,17 @@
         };
 
         // --- Admin Dashboard logic ---
+        // This client-side check stops the admin panel from opening in the UI, but by
+        // itself it is NOT real security — anyone can still call showAdmin() directly
+        // from the browser console, bypassing this check entirely, unless the Firebase
+        // Database Rules also require `admins/{uid} === true` before allowing writes to
+        // ban users or cancel trips. That server-side rule is what actually protects the
+        // data; see the note left in the Firebase console reminder below.
         window.showAdmin = async () => {
+            const adminSnap = await get(ref(db, `admins/${currentUser.uid}`));
+            if (adminSnap.val() !== true) {
+                return Swal.fire('Access Denied', "You don't have admin access on this account.", 'error');
+            }
             document.getElementById('adminModal').classList.remove('hidden');
             
             const usersSnap = await get(ref(db, 'users'));
@@ -1412,7 +1761,37 @@
             
             document.getElementById('adminTotalUsers').textContent = Object.keys(users).length;
             document.getElementById('adminTotalTrips').textContent = Object.keys(trips).length;
-            
+
+            // Pending KYC — this is the actual human review step. Admin can see the DL/RC
+            // numbers the driver typed AND the document photos they uploaded side by side,
+            // and only then approve or reject. Nothing gets auto-verified anymore.
+            const kycList = document.getElementById('adminKycList');
+            kycList.innerHTML = '';
+            const pendingDrivers = Object.entries(users).filter(([uid, u]) => u.kycStatus === 'pending');
+            pendingDrivers.forEach(([uid, u]) => {
+                const docs = u.carDetails?.docUrls || [];
+                const docsHtml = docs.length > 0
+                    ? docs.map(url => `<a href="${url}" target="_blank"><img src="${url}" style="width:56px; height:56px; object-fit:cover; border-radius:6px; border:1px solid var(--border); margin-right:6px;"></a>`).join('')
+                    : '<span style="font-size:12px; color:var(--danger);">No documents uploaded</span>';
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.style.margin = '4px 0';
+                card.style.padding = '10px';
+                card.innerHTML = `
+                    <div style="font-size:13px; font-weight:bold;">${u.name} <span style="font-weight:normal; color:var(--text-light);">(${u.vehicleType || 'car'})</span></div>
+                    <div style="font-size:12px; color:var(--text-light);">DL: ${u.carDetails?.dl || '-'} · RC: ${u.carDetails?.rc || '-'}</div>
+                    <div style="margin:8px 0;">${docsHtml}</div>
+                    <div style="display:flex; gap:6px;">
+                        <button class="btn btn-success btn-sm" style="padding:4px 8px; font-size:11px;" onclick="adminReviewKyc('${uid}', 'verified')">Approve</button>
+                        <button class="btn btn-danger btn-sm" style="padding:4px 8px; font-size:11px;" onclick="adminReviewKyc('${uid}', 'rejected')">Reject</button>
+                    </div>
+                `;
+                kycList.appendChild(card);
+            });
+            if (pendingDrivers.length === 0) {
+                kycList.innerHTML = '<p style="font-size:12px; color:var(--text-light);">No pending verifications</p>';
+            }
+
             // Active trips
             const tripsList = document.getElementById('adminTripsList');
             tripsList.innerHTML = '';
@@ -1460,6 +1839,12 @@
                 `;
                 usersList.appendChild(card);
             });
+        };
+
+        window.adminReviewKyc = async (uid, decision) => {
+            await update(ref(db, `users/${uid}`), { kycStatus: decision });
+            Swal.fire('Done', `Driver ${decision === 'verified' ? 'approved' : 'rejected'}`, 'success');
+            showAdmin();
         };
 
         window.adminCancelTrip = async (tripId) => {
@@ -1601,7 +1986,7 @@
                         return `<div style="font-size: 13px; padding: 6px 0; border-top: 1px solid var(--border);">
                                   <div class="flex-between">
                                     <span>${r.name} (${r.seats} seat(s)) ${quietPref}</span>
-                                    <span class="badge ${r.status === 'accepted' ? 'badge-success' : (r.status === 'rejected' ? 'badge-danger' : 'badge-warning')}">${r.status}</span>
+                                    <span class="badge ${r.status === 'accepted' ? 'badge-success' : (r.status === 'rejected' || r.status === 'cancelled' ? 'badge-danger' : 'badge-warning')}">${r.status}</span>
                                   </div>
                                   <div style="font-size: 11px; color:var(--text-light); margin-top:2px;"><i class="fas fa-map-pin"></i> Pickup: ${r.pickup || 'Not set'}</div>
                                   ${actionsHtml}
@@ -1612,6 +1997,7 @@
                 let actionBtns = '';
                 if (trip.status === 'open' || trip.status === 'full') {
                     actionBtns += `<button class="btn btn-primary btn-sm" onclick="startTrip('${trip.id}')" style="margin-right: 8px;"><i class="fas fa-play"></i> Start Trip</button>`;
+                    actionBtns += `<button class="btn btn-danger btn-sm" onclick="cancelMyTrip('${trip.id}')" style="margin-right: 8px;"><i class="fas fa-ban"></i> Cancel Trip</button>`;
                 } else if (trip.status === 'started') {
                     actionBtns += `<button class="btn btn-success btn-sm" onclick="endTrip('${trip.id}')" style="margin-right: 8px;"><i class="fas fa-flag-checkered"></i> Complete Trip</button>`;
                 }
@@ -1636,19 +2022,24 @@
                     </div>`;
             } else {
                 const myReq = trip.riders[currentUser.uid];
-                const statusBadgeClass = myReq.status === 'accepted' ? 'badge-success' : (myReq.status === 'rejected' ? 'badge-danger' : 'badge-warning');
+                const statusBadgeClass = myReq.status === 'accepted' ? 'badge-success' : (myReq.status === 'rejected' || myReq.status === 'cancelled' ? 'badge-danger' : 'badge-warning');
                 
                 let footerText = '';
                 if (myReq.status === 'rejected') {
                     footerText = `<i class="fas fa-info-circle"></i> Driver declined request - seat released.`;
+                } else if (myReq.status === 'cancelled') {
+                    footerText = `<i class="fas fa-info-circle"></i> You cancelled this request - seat released.`;
                 } else {
                     const totalFare = trip.farePerSeat * myReq.seats;
                     footerText = `<i class="fas fa-clock"></i> ${dateStr} · ${myReq.seats} seat(s) · Total Share: <strong>₹${totalFare}</strong> (${trip.paymentMode})`;
                 }
 
                 let riderActionBtns = '';
+                if ((trip.status === 'open' || trip.status === 'full') && (myReq.status === 'requested' || myReq.status === 'accepted')) {
+                    riderActionBtns += `<button class="btn btn-danger btn-sm" onclick="cancelMyRequest('${trip.id}')" style="margin-top: 8px;"><i class="fas fa-ban"></i> Cancel My Request</button>`;
+                }
                 if (isActive && myReq.status === 'accepted') {
-                    riderActionBtns = `<button class="btn btn-outline btn-sm" onclick="openChat('${trip.id}')" style="margin-top: 8px;"><i class="fas fa-comments"></i> Group Chat</button>`;
+                    riderActionBtns += `<button class="btn btn-outline btn-sm" onclick="openChat('${trip.id}')" style="margin-top: 8px; margin-left: 8px;"><i class="fas fa-comments"></i> Group Chat</button>`;
                 } else if (trip.status === 'completed' && myReq.status === 'accepted') {
                     const hasRated = trip.ratings?.[trip.driverId];
                     const rateBtn = !hasRated
@@ -1672,7 +2063,7 @@
                             <img src="${trip.driverPhoto}" style="width: 32px; height: 32px; border-radius: 50%;">
                             <div style="font-size: 13px;">
                                 <strong>${trip.driverName}</strong> 
-                                ${trip.driverVerified ? '<i class="fas fa-check-circle" style="color:var(--primary);"></i>' : ''} · ${trip.carModel} ${trip.carPlate ? '(' + trip.carPlate + ')' : ''}
+                                ${trip.driverVerified ? '<i class="fas fa-check-circle" style="color:var(--primary);"></i>' : ''} · <i class="fas ${trip.vehicleType === 'bike' ? 'fa-motorcycle' : 'fa-car-side'}"></i> ${trip.carModel} ${trip.carPlate ? '(' + trip.carPlate + ')' : ''}
                             </div>
                         </div>
                         <div style="font-size: 14px; margin-bottom: 4px;"><i class="fas fa-circle" style="color: var(--success); font-size: 8px;"></i> ${trip.startLocation.address}</div>
