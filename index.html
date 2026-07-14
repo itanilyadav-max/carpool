@@ -85,14 +85,6 @@
             <i class="fas fa-car-side" style="font-size: 64px; color: var(--primary);"></i>
             <h2>RideShare</h2>
             <p style="color: var(--text-light); margin-bottom: 30px;">Share rides, save money, go green</p>
-            <div id="recaptcha-container"></div>
-            <div class="input-group">
-                <input type="tel" id="phoneInput" class="input" placeholder="+91 98765 43210">
-            </div>
-            <button class="btn btn-primary btn-full" onclick="sendOTP()">
-                <i class="fas fa-mobile-alt"></i> Send OTP
-            </button>
-            <div class="divider">OR</div>
             <button class="btn btn-outline btn-full" onclick="signInGoogle()">
                 <i class="fab fa-google"></i> Continue with Google
             </button>
@@ -411,7 +403,7 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getAuth, signInWithPhoneNumber, RecaptchaVerifier, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
         import { getDatabase, ref, set, push, onValue, update, get, runTransaction, query, orderByChild, equalTo, remove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
         import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
@@ -432,11 +424,6 @@
         let currentUser = null;
         let userLocation = null;
         let map = null;
-        let confirmationResult = null;
-
-        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-            'size': 'invisible'
-        });
 
         // Auth State
         onAuthStateChanged(auth, async (user) => {
@@ -458,44 +445,6 @@
                 showLogin();
             }
         });
-
-        window.sendOTP = async () => {
-            let phone = document.getElementById('phoneInput').value.trim();
-            if (!phone) return Swal.fire('Error', 'Enter phone number', 'error');
-
-            // Firebase requires strict E.164 format: "+" + country code + digits, no spaces/dashes.
-            // Clean up common typing mistakes (spaces, dashes) so people don't get a
-            // silent/confusing failure just because they typed it like the placeholder shows.
-            phone = phone.replace(/[\s-]/g, '');
-            if (!phone.startsWith('+')) {
-                // Assume India (+91) if no country code was given, and strip a leading 0 if present.
-                phone = '+91' + phone.replace(/^0+/, '');
-            }
-            if (!/^\+\d{10,15}$/.test(phone)) {
-                return Swal.fire('Error', 'Enter a valid phone number with country code, e.g. +919876543210', 'error');
-            }
-
-            try {
-                confirmationResult = await signInWithPhoneNumber(auth, phone, window.recaptchaVerifier);
-                const { value: otp } = await Swal.fire({
-                    title: 'Enter OTP',
-                    text: `We sent a 6-digit code to ${phone}`,
-                    input: 'text',
-                    inputPlaceholder: '123456'
-                });
-                if (otp) {
-                    await confirmationResult.confirm(otp);
-                }
-            } catch (error) {
-                let msg = error.message;
-                if (error.code === 'auth/invalid-phone-number') msg = 'This phone number looks invalid. Please check the number and country code.';
-                if (error.code === 'auth/too-many-requests') msg = 'Too many attempts from this number/device. Please wait a while and try again.';
-                if (error.code === 'auth/billing-not-enabled' || error.code === 'auth/operation-not-allowed') msg = 'Phone sign-in isn\'t enabled for this app yet — this needs to be turned on in Firebase Console → Authentication → Sign-in method → Phone.';
-                Swal.fire('Error', msg, 'error');
-                // Reset the invisible reCAPTCHA so the next attempt doesn't silently fail
-                try { window.recaptchaVerifier.render().then(id => grecaptcha.reset(id)); } catch(e) {}
-            }
-        };
 
         window.signInGoogle = async () => {
             try {
