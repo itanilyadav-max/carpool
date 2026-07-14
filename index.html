@@ -105,6 +105,9 @@
                 <label>Password</label>
                 <input type="password" id="passwordInput" class="input" placeholder="At least 6 characters">
             </div>
+            <p style="text-align: right; margin: -10px 0 14px;">
+                <a href="#" id="forgotPasswordLink" onclick="forgotPassword(event)" style="color: var(--primary); font-size: 13px; font-weight: 600;">Forgot Password?</a>
+            </p>
             <button class="btn btn-primary btn-full" id="emailAuthBtn" onclick="emailLogin()">
                 <i class="fas fa-envelope"></i> Login with Email
             </button>
@@ -408,7 +411,7 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getAuth, signInWithPhoneNumber, RecaptchaVerifier, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getAuth, signInWithPhoneNumber, RecaptchaVerifier, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
         import { getDatabase, ref, set, push, onValue, update, get, runTransaction, query, orderByChild, equalTo, remove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
         import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
@@ -457,12 +460,26 @@
         });
 
         window.sendOTP = async () => {
-            const phone = document.getElementById('phoneInput').value;
+            let phone = document.getElementById('phoneInput').value.trim();
             if (!phone) return Swal.fire('Error', 'Enter phone number', 'error');
+
+            // Firebase requires strict E.164 format: "+" + country code + digits, no spaces/dashes.
+            // Clean up common typing mistakes (spaces, dashes) so people don't get a
+            // silent/confusing failure just because they typed it like the placeholder shows.
+            phone = phone.replace(/[\s-]/g, '');
+            if (!phone.startsWith('+')) {
+                // Assume India (+91) if no country code was given, and strip a leading 0 if present.
+                phone = '+91' + phone.replace(/^0+/, '');
+            }
+            if (!/^\+\d{10,15}$/.test(phone)) {
+                return Swal.fire('Error', 'Enter a valid phone number with country code, e.g. +919876543210', 'error');
+            }
+
             try {
                 confirmationResult = await signInWithPhoneNumber(auth, phone, window.recaptchaVerifier);
                 const { value: otp } = await Swal.fire({
                     title: 'Enter OTP',
+                    text: `We sent a 6-digit code to ${phone}`,
                     input: 'text',
                     inputPlaceholder: '123456'
                 });
@@ -470,7 +487,13 @@
                     await confirmationResult.confirm(otp);
                 }
             } catch (error) {
-                Swal.fire('Error', error.message, 'error');
+                let msg = error.message;
+                if (error.code === 'auth/invalid-phone-number') msg = 'This phone number looks invalid. Please check the number and country code.';
+                if (error.code === 'auth/too-many-requests') msg = 'Too many attempts from this number/device. Please wait a while and try again.';
+                if (error.code === 'auth/billing-not-enabled' || error.code === 'auth/operation-not-allowed') msg = 'Phone sign-in isn\'t enabled for this app yet — this needs to be turned on in Firebase Console → Authentication → Sign-in method → Phone.';
+                Swal.fire('Error', msg, 'error');
+                // Reset the invisible reCAPTCHA so the next attempt doesn't silently fail
+                try { window.recaptchaVerifier.render().then(id => grecaptcha.reset(id)); } catch(e) {}
             }
         };
 
@@ -491,12 +514,15 @@
             isRegisterMode = !isRegisterMode;
             const btn = document.getElementById('emailAuthBtn');
             const link = document.getElementById('toggleAuthModeLink');
+            const forgotLink = document.getElementById('forgotPasswordLink');
             if (isRegisterMode) {
                 btn.innerHTML = '<i class="fas fa-user-plus"></i> Create Account';
                 link.textContent = 'Already have an account? Login';
+                if (forgotLink) forgotLink.parentElement.style.display = 'none';
             } else {
                 btn.innerHTML = '<i class="fas fa-envelope"></i> Login with Email';
                 link.textContent = 'Create an account';
+                if (forgotLink) forgotLink.parentElement.style.display = '';
             }
         };
 
@@ -513,6 +539,39 @@
                 }
             } catch (error) {
                 Swal.fire('Error', error.message, 'error');
+            }
+        };
+
+        // Sends a Firebase password reset email. Pre-fills whatever email the
+        // user already typed in the login form, but lets them change/enter it
+        // fresh via the prompt, since they may not remember which email they used.
+        window.forgotPassword = async (e) => {
+            e.preventDefault();
+            const prefilled = document.getElementById('emailInput').value.trim();
+            const { value: email } = await Swal.fire({
+                title: 'Reset your password',
+                input: 'email',
+                inputValue: prefilled,
+                inputPlaceholder: 'you@example.com',
+                text: "Enter your account email — we'll send you a link to reset your password.",
+                showCancelButton: true,
+                confirmButtonText: 'Send Reset Link',
+                confirmButtonColor: '#6366f1',
+                inputValidator: (value) => { if (!value) return 'Please enter your email'; }
+            });
+            if (!email) return; // cancelled
+            try {
+                await sendPasswordResetEmail(auth, email);
+                Swal.fire({
+                    icon: 'success',
+                    title: 'Reset link sent!',
+                    html: `Check the inbox (and spam folder) for <b>${email}</b> — click the link in that email to set a new password, then come back here and log in.`
+                });
+            } catch (error) {
+                let msg = error.message;
+                if (error.code === 'auth/user-not-found') msg = 'No account found with this email. Double-check the email, or create a new account instead.';
+                if (error.code === 'auth/invalid-email') msg = 'That email address doesn\'t look valid. Please check and try again.';
+                Swal.fire('Error', msg, 'error');
             }
         };
 
